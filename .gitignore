@@ -9,3 +9,6 @@ behavior-spec/eval-report.json
 
 # Node runtime data (per-run, not part of Alma's committed identity)
 node/data/
+
+# Alma's private signing key (the .pub is committed so her signatures verify)
+keys/*.key

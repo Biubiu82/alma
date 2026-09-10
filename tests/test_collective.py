@@ -13,6 +13,7 @@ import sys
 
 from conftest import REPO, STATE_ITEMS, copy_state
 from almalib.canon import sha256_file
+from almalib import policy
 
 
 def run_tool(name, *args):
@@ -39,7 +40,10 @@ def test_1_identity(make_state):
     # extraction of CLAUDE.md §1.
     sr, _ = S.read_state_root(root)
     assert sr["constitution_path"] == "constitution.md"
-    assert len(sr["signatures"]) >= 2
+    # Signature COUNT follows the configured threshold (§2.3); attribution is
+    # unconditional -- something always signs, even when nothing is required.
+    assert len(sr["signatures"]) >= policy.threshold(root)
+    assert len(sr["signatures"]) >= 1
     with open(os.path.join(root, "CLAUDE.md"), encoding="utf-8") as f:
         claude = f.read()
     with open(os.path.join(root, "constitution.md"), encoding="utf-8") as f:

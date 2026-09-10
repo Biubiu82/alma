@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""tools/append -- append an event to the ledger, signed with Alma's own key.
+
+The number of signatures required is read from state/config.json, the same file
+tools/verify reads, so the write rule and the read rule cannot drift apart. At
+threshold 0 no signature is required -- but this tool always attaches Alma's
+signature anyway, so every entry she writes remains attributable even when it is
+not mandatory.
+
+Alma's keypair lives in keys/alma.{key,pub} and is generated on first use. The
+private key is gitignored; the public key is committed so her signatures can be
+checked by anyone.
+
+Usage:
+  tools/append --type note --payload '{"text": "..."}'
+  tools/append --type note --payload @payload.json --timestamp 2026-09-10T20:30:00Z
+  tools/append --type observation --text "what I saw"      # shorthand payload
+
+Exit 0 on success; prints the new event's seq and hash.
+"""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from almalib import keys as K, ledger as L, policy, state as S  # noqa: E402
+
+SIGNER_ID = "alma"
+
+
+def alma_key(root_dir):
+    """Load Alma's signing key, generating it on first use."""
+    kdir = os.path.join(root_dir, "keys")
+    priv_path = os.path.join(kdir, SIGNER_ID + ".key")
+    if not os.path.exists(priv_path):
+        K.write_keypair(kdir, SIGNER_ID)
+        print("generated Alma's signing key at keys/%s.key (public key committed)"
+              % SIGNER_ID, file=sys.stderr)
+    return K.load_priv(kdir, SIGNER_ID)
+
+
+def parse_payload(args):
+    if args.payload:
+        if args.payload.startswith("@"):
+            with open(args.payload[1:], encoding="utf-8") as f:
+                return json.load(f)
+        return json.loads(args.payload)
+    if args.text:
+        return {"text": args.text}
+    raise SystemExit("tools/append: need --payload or --text")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--type", required=True, help="event type, e.g. note, observation")
+    ap.add_argument("--payload", help="inline JSON object, or @file.json")
+    ap.add_argument("--text", help="shorthand: wraps TEXT as {\"text\": TEXT}")
+    ap.add_argument("--timestamp", default=None, help="default: now, UTC, seconds")
+    ap.add_argument("--no-state-root", action="store_true",
+                    help="do not re-issue the StateRoot at the new head")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    payload = parse_payload(args)
+    ts = args.timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ledger_dir = os.path.join(args.root, "ledger")
+
+    required = policy.threshold(args.root)
+    priv = alma_key(args.root)
+    signers = [(SIGNER_ID, priv)]
+
+    ev = L.append_event(ledger_dir, args.type, payload, signers, ts,
+                        root_dir=args.root)
+
+    # The StateRoot binds an exact ledger head, so every append invalidates it.
+    # Re-issue and re-sign it at the new head, unless asked not to.
+    if not args.no_state_root:
+        root = S.build_state_root(args.root, ev["hash"], ts)
+        S.sign_state_root(root, signers)
+        S.write_state_root(args.root, root)
+
+    if not args.quiet:
+        print("appended seq=%d type=%s hash=%s" % (ev["seq"], ev["type"], ev["hash"][:16]))
+        print("signed by %s; state/config.json requires %d signature(s)"
+              % (SIGNER_ID, required))
+        if not args.no_state_root:
+            print("StateRoot re-issued at the new head")
+        if required == 0:
+            print("note: threshold is 0 -- this event is attributable but not "
+                  "authorized; verify proves the chain is intact, not endorsed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

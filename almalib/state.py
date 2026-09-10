@@ -6,6 +6,7 @@ import os
 from .canon import canon, canon_bytes, sha256_hex, sha256_file
 from . import keys as K
 from . import ledger as L
+from . import policy
 
 
 # ---------------------------------------------------------------------------
@@ -119,15 +120,19 @@ def verify_state_root(root_dir, ledger_dir=None):
     elif root.get("ledger_head_hash") != lv.head_hash:
         errors.append("StateRoot ledger_head_hash does not match verified head")
 
-    maintainers = L.maintainer_pubkeys(ledger_dir)
-    valid = set()
-    for s in root.get("signatures", []):
-        kid = s.get("key_id")
-        pub = maintainers.get(kid)
-        if pub and kid not in valid and K.verify_hex(pub, s.get("sig", ""), root["hash"]):
-            valid.add(kid)
-    if len(valid) < 2:
-        errors.append("StateRoot has fewer than 2 valid maintainer signatures")
+    # Signature requirement follows the SAME configured threshold as the ledger.
+    required = policy.threshold(root_dir)
+    if required > 0:
+        known = policy.authorized_keys(root_dir, L.maintainer_pubkeys(ledger_dir))
+        valid = set()
+        for s in root.get("signatures", []):
+            kid = s.get("key_id")
+            pub = known.get(kid)
+            if pub and kid not in valid and K.verify_hex(pub, s.get("sig", ""), root["hash"]):
+                valid.add(kid)
+        if len(valid) < required:
+            errors.append("StateRoot has %d valid signature(s), config requires %d"
+                          % (len(valid), required))
 
     return (len(errors) == 0), errors
 

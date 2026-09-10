@@ -19,7 +19,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from almalib import ledger as L, state as S  # noqa: E402
+from almalib import ledger as L, state as S, policy  # noqa: E402
 
 
 def main(argv=None):
@@ -32,10 +32,18 @@ def main(argv=None):
 
     ledger_dir = args.ledger or os.path.join(args.root, "ledger")
 
-    v = L.verify_chain(ledger_dir)
+    v = L.verify_chain(ledger_dir, args.root)
+    req = policy.threshold(args.root)
     if not args.quiet:
         if v.ok:
-            print("ledger OK: %d events, head=%s" % (v.count, v.head_hash[:16]))
+            print("ledger INTACT: %d events, head=%s" % (v.count, v.head_hash[:16]))
+            print("  unaltered since genesis; this does NOT establish that its "
+                  "contents are true")
+            if req == 0:
+                print("  authorization: NONE -- state/config.json threshold is 0, "
+                      "so no signature was required")
+            else:
+                print("  authorization: %d valid signature(s) required per event" % req)
         else:
             print("ledger FAILED: %s" % (v.errors[0] if v.errors else "unknown"))
     ok = v.ok
@@ -44,7 +52,8 @@ def main(argv=None):
         sr_ok, sr_errs = S.verify_state_root(args.root, ledger_dir)
         if not args.quiet:
             if sr_ok:
-                print("StateRoot OK: constitution + ledger head bound and 2-of-3 signed")
+                print("StateRoot OK: binds constitution.md and the current ledger head"
+                      + ("" if req == 0 else "; %d signature(s) verified" % req))
             else:
                 for e in sr_errs:
                     print("StateRoot FAILED: %s" % e)

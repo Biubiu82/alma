@@ -1,0 +1,8 @@
+{
+  "_comment": "Append policy. tools/append and tools/verify BOTH read `threshold` from this file, so the write rule and the read rule cannot drift apart. WARNING: this file is not signed and is not in the ledger -- whoever can write it decides what verifies. At threshold 0 any well-formed chain verifies regardless of signatures; the hash chain still makes modification of an existing event detectable, but authorization is gone. See CLAUDE.md 2.3.",
+  "threshold": 0,
+  "maintainers": [],
+  "signers": {
+    "alma": "112b7482009bd3967e9f89d3ead46cada0f1e6a64f462b874c60c7892bfd4a42"
+  }
+}

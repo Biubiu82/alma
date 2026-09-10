@@ -29,6 +29,7 @@ import os
 
 from .canon import canon_bytes, sha256_hex
 from . import keys as K
+from . import policy
 
 GENESIS_PREV = "0" * 64
 
@@ -95,11 +96,16 @@ def head_info(ledger_dir):
     return obj["seq"], obj["hash"]
 
 
-def append_event(ledger_dir, etype, payload, signers, timestamp):
-    """Append a new event. Enforces the §2.3 rule of >= 2 signatures at write
-    time; the verifier enforces it independently at read time."""
-    if len(signers) < 2:
-        raise ValueError("ledger append requires 2-of-3 maintainer signatures")
+def append_event(ledger_dir, etype, payload, signers, timestamp, root_dir=None):
+    """Append a new event. Enforces the configured signature threshold at write
+    time (state/config.json); the verifier enforces the SAME threshold
+    independently at read time, so the two rules cannot drift apart."""
+    root_dir = root_dir or os.path.dirname(os.path.abspath(ledger_dir))
+    req = policy.threshold(root_dir)
+    if len(signers) < req:
+        raise ValueError(
+            "ledger append requires %d signature(s) per state/config.json, got %d"
+            % (req, len(signers)))
     seq, prev = head_info(ledger_dir)
     ev = build_event(seq + 1, etype, payload, prev, timestamp)
     sign_event(ev, signers)
@@ -122,17 +128,25 @@ class VerifyResult:
         return self.ok
 
 
-def verify_chain(ledger_dir):
+def verify_chain(ledger_dir, root_dir=None):
     """Walk the ledger from genesis to head. Returns a VerifyResult.
 
-    Any single-byte change anywhere in history causes ok == False: content bytes
-    change the canonical-equality check and the recomputed hash; hash/signature
-    bytes change the canonical-equality check and the signature verification;
-    whitespace/structural bytes change the canonical-equality check.
+    INTEGRITY (always enforced): any single-byte change to an existing event
+    causes ok == False -- content bytes change the canonical-equality check and
+    the recomputed hash; hash/signature bytes change the canonical-equality
+    check; whitespace/structural bytes change the canonical-equality check.
+
+    AUTHORIZATION (configurable): the number of valid signatures required per
+    event is read from state/config.json -- the SAME source tools/append writes
+    against. At threshold 0 no signature is required, so this function attests
+    that the chain is *intact*, not that it is *authorized*. See CLAUDE.md §2.3.
     """
     paths = list_event_paths(ledger_dir)
     if not paths:
         return VerifyResult(False, None, ["ledger is empty"], 0)
+
+    root_dir = root_dir or os.path.dirname(os.path.abspath(ledger_dir))
+    required = policy.threshold(root_dir)
 
     prev = GENESIS_PREV
     maintainers = None
@@ -160,23 +174,40 @@ def verify_chain(ledger_dir):
         if compute_hash(obj) != obj.get("hash"):
             return VerifyResult(False, None, ["%s: hash does not match content" % path], i)
 
-        # 4. Establish trust anchor from genesis.
+        # 4. Establish the key directory from genesis, extended by config.
         if i == 0:
             if obj.get("type") != "genesis":
                 return VerifyResult(False, None, ["first event must be genesis"], i)
-            maintainers = obj["payload"].get("maintainers")
-            if not maintainers or len(maintainers) < 3:
-                return VerifyResult(False, None, ["genesis must declare 3 maintainers"], i)
+            genesis_maintainers = obj["payload"].get("maintainers") or {}
+            maintainers = policy.authorized_keys(root_dir, genesis_maintainers)
 
-        # 5. 2-of-3 maintainer signatures over the hash.
+        # 5. Signatures.
+        #
+        # Two separate rules, deliberately:
+        #   (a) INTEGRITY -- every signature that is PRESENT must be valid and
+        #       from a known key. This holds at every threshold, including 0, so
+        #       a forged or corrupted signature is always detected and an
+        #       attached signature is always meaningful attribution.
+        #   (b) AUTHORIZATION -- how MANY valid signatures are required is the
+        #       configured threshold. At 0, an event may carry none at all.
         valid = set()
         for s in obj.get("signatures", []):
             kid = s.get("key_id")
             pub = maintainers.get(kid) if maintainers else None
-            if pub and kid not in valid and K.verify_hex(pub, s.get("sig", ""), obj["hash"]):
-                valid.add(kid)
-        if len(valid) < 2:
-            return VerifyResult(False, None, ["%s: fewer than 2 valid maintainer signatures" % path], i)
+            if pub is None:
+                return VerifyResult(
+                    False, None,
+                    ["%s: signature from unknown key_id %r" % (path, kid)], i)
+            if not K.verify_hex(pub, s.get("sig", ""), obj["hash"]):
+                return VerifyResult(
+                    False, None,
+                    ["%s: invalid signature by %s" % (path, kid)], i)
+            valid.add(kid)
+        if len(valid) < required:
+            return VerifyResult(
+                False, None,
+                ["%s: %d valid signature(s), config requires %d"
+                 % (path, len(valid), required)], i)
 
         prev = obj["hash"]
         head = obj["hash"]

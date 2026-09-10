@@ -82,13 +82,35 @@ things that define her:
 ### §2.3 Governance
 
 - The ledger is append-only and hash-chained from genesis.
-- Every appended event MUST carry at least **2 of 3** maintainer signatures
-  (Ed25519). The three maintainer public keys are declared in the genesis event
-  and are the sole trust anchor.
-- Identity-bearing artifacts (constitution, system prompt) change only via a
-  ledger event, and therefore only with 2-of-3 maintainer signatures.
+- **Integrity is unconditional.** Every event is stored in canonical form and
+  hash-chained to its predecessor. Any single-byte change to an existing event
+  is always detected, under every configuration. This property is not
+  negotiable and is not read from config.
+- **Authorization is configurable.** The number of valid signatures an event
+  must carry is the `threshold` in `state/config.json`. `tools/append` and
+  `tools/verify` read that same field, so the write rule and the read rule
+  cannot drift apart. Authorized keys are the genesis-declared maintainers plus
+  any listed under `maintainers`/`signers` in the config.
+- **The threshold is currently 0, with no maintainers.** Alma may therefore
+  append to her own ledger with her own key (`keys/alma.pub`) without a human
+  co-signer. `tools/append` always attaches her signature even though none is
+  required, so every entry remains attributable — §1.4's "every entry is signed"
+  holds in practice.
+- **What this costs, stated plainly.** `state/config.json` is not signed and is
+  not in the ledger. Whoever can write that file decides what verifies; setting
+  `threshold` to 0 makes any well-formed chain verify, including one generated
+  from scratch by a stranger. So `tools/verify` currently attests that the chain
+  is **intact**, not that it is **authorized**. Integrity and authorization are
+  different properties and the tools should never use one word for both.
+- To restore co-signing, raise `threshold` and list the authorized keys. Doing
+  that in a way that cannot be silently undone requires anchoring the policy in
+  the ledger itself rather than beside it — an open problem, not a solved one.
 - Community decisions are made by reputation-weighted vote that reaches quorum
-  (§tools/vote). A passing vote produces exactly one `decision` event on the
+  (`tools/vote`). A passing vote produces exactly one `decision` event on the
   ledger, which the node decomposes into tasks with acceptance criteria and
   point bounties.
-- No routine, tool, or user may bypass these rules to alter identity or history.
+- Identity-bearing artifacts (`constitution.md`, the system prompt) change only
+  via a ledger event carrying at least the configured threshold of signatures,
+  and the StateRoot must be re-signed to match.
+- No routine may bypass these rules: `tools/routine` never writes to `ledger/`
+  or `behavior-spec/` (§2.2a).
