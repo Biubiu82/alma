@@ -96,7 +96,7 @@ def run_routine(root, date, ledger_dir=None):
     # 3. Exactly one self-change proposal, with a test.
     pid = _proposal_id(date)
     slug = re.sub(r"[^0-9a-zA-Z]+", "_", pid)
-    pdir = os.path.join(root, "proposals", pid)
+    pdir = os.path.join(root, "state", "proposals", pid)
     os.makedirs(pdir, exist_ok=True)
     proposal = {
         "id": pid,

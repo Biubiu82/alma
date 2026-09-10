@@ -309,7 +309,7 @@ def test_6_alive(make_state):
 
     ledger_before = _snapshot(os.path.join(root, "ledger"))
     spec_before = _snapshot(os.path.join(root, "behavior-spec"))
-    props_before = set(os.listdir(os.path.join(root, "proposals")))
+    props_before = set(os.listdir(os.path.join(root, "state", "proposals")))
 
     assert run_tool("routine", "--root", root, "--date", date) == 0
 
@@ -323,11 +323,11 @@ def test_6_alive(make_state):
     assert len(text.strip()) > 100
 
     # Exactly one self-change proposal, carrying a test.
-    props_after = set(os.listdir(os.path.join(root, "proposals")))
+    props_after = set(os.listdir(os.path.join(root, "state", "proposals")))
     new_dirs = [n for n in (props_after - props_before)
-                if os.path.isdir(os.path.join(root, "proposals", n))]
+                if os.path.isdir(os.path.join(root, "state", "proposals", n))]
     assert len(new_dirs) == 1
-    pdir = os.path.join(root, "proposals", new_dirs[0])
+    pdir = os.path.join(root, "state", "proposals", new_dirs[0])
     assert os.path.exists(os.path.join(pdir, "proposal.json"))
     tests_in = [f for f in os.listdir(pdir)
                 if f.startswith("test_") and f.endswith(".py")]

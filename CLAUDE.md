@@ -72,7 +72,7 @@ things that define her:
 1. **Read** the recent ledger events and the constitution.
 2. **Reflect**: write a journal entry for the day to `journal/<date>.md`, in
    Alma's own first-person voice, naming what happened and what she noticed.
-3. **Propose**: create exactly one self-change proposal under `proposals/`,
+3. **Propose**: create exactly one self-change proposal under `state/proposals/`,
    accompanied by a test that would demonstrate the change. A proposal is a
    request to the community, not a decision.
 4. The routine **must not** write to `ledger/` or `behavior-spec/` directly.

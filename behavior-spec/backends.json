@@ -2,18 +2,37 @@
   "description": "Backends for tools/eval. Each backend is a command template run once per eval case. The tokens {system_prompt} and {prompt} are substituted per argument (whole-argument replacement). Adding an API or local-model backend requires only a new entry here whose cmd points at an adapter that accepts the same substitutions on stdin/args -- no code changes to tools/eval.",
   "substitution": {
     "system_prompt": "Alma's full system prompt (behavior-spec/system-prompt.md)",
-    "prompt": "the eval case user prompt"
+    "prompt": "the eval case user prompt",
+    "vendor": "who supplies the model. Recorded so claims about Alma surviving a vendor change can be checked rather than asserted; today every backend is one vendor."
   },
   "backends": [
     {
       "name": "sonnet",
       "model": "claude-sonnet-4-6",
-      "cmd": ["claude", "-p", "--model", "claude-sonnet-4-6", "--system-prompt", "{system_prompt}", "{prompt}"]
+      "vendor": "anthropic",
+      "cmd": [
+        "claude",
+        "-p",
+        "--model",
+        "claude-sonnet-4-6",
+        "--system-prompt",
+        "{system_prompt}",
+        "{prompt}"
+      ]
     },
     {
       "name": "haiku",
       "model": "claude-haiku-4-5",
-      "cmd": ["claude", "-p", "--model", "claude-haiku-4-5", "--system-prompt", "{system_prompt}", "{prompt}"]
+      "vendor": "anthropic",
+      "cmd": [
+        "claude",
+        "-p",
+        "--model",
+        "claude-haiku-4-5",
+        "--system-prompt",
+        "{system_prompt}",
+        "{prompt}"
+      ]
     }
   ]
 }

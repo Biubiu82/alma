@@ -60,7 +60,7 @@ def copy_state(dst, items=STATE_ITEMS):
             shutil.copytree(src, target, dirs_exist_ok=True)
         elif os.path.exists(src):
             shutil.copy2(src, target)
-    for d in ("proposals", "journal"):
+    for d in (os.path.join("state", "proposals"), "journal"):
         os.makedirs(os.path.join(dst, d), exist_ok=True)
     return dst
 
