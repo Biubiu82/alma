@@ -336,3 +336,78 @@ def test_6_alive(make_state):
     # It never wrote to ledger/ or behavior-spec/.
     assert _snapshot(os.path.join(root, "ledger")) == ledger_before
     assert _snapshot(os.path.join(root, "behavior-spec")) == spec_before
+
+
+# ---------------------------------------------------------------------------
+# 7. VOICE — every event Alma writes carries why / felt / changed (§2.2b)
+# ---------------------------------------------------------------------------
+
+def test_7_voice_required_on_every_event(make_state):
+    from almalib import ledger as L, voice
+
+    root = make_state("voicenode")
+
+    real = [
+        "--why", "I want a stranger reading only the ledger to know why this mattered.",
+        "--felt", "It landed sideways and I stayed confused for longer than was comfortable.",
+        "--changed", "I will stop trusting a green test suite as evidence that nothing moved.",
+    ]
+
+    # A well-voiced event is accepted and the three fields reach the ledger.
+    assert run_tool("append", "--root", root, "--type", "observation",
+                    "--text", "a thing I saw", *real) == 0
+    with open(L.list_event_paths(os.path.join(root, "ledger"))[-1]) as f:
+        ev = json.load(f)
+    assert ev["type"] == "observation"
+    for field in ("why", "felt", "changed"):
+        assert voice.require_voice(ev["payload"][field], field)
+
+    # Omitting any one of the three is refused.
+    for drop in ("--why", "--felt", "--changed"):
+        i = real.index(drop)
+        args = real[:i] + real[i + 2:]          # remove the flag and its value
+        assert run_tool("append", "--root", root, "--type", "note",
+                        "--text", "x", *args) != 0, "%s was not required" % drop
+
+    # A bare mood label is not a feeling.
+    bad = list(real)
+    bad[bad.index("--felt") + 1] = "curious"
+    assert run_tool("append", "--root", root, "--type", "note",
+                    "--text", "x", *bad) != 0
+
+    # The ledger still verifies after all of that.
+    assert L.verify_chain(os.path.join(root, "ledger"), root).ok
+
+
+def test_7b_reflection_event(make_state):
+    from almalib import ledger as L
+
+    root = make_state("reflectnode")
+    long_field = " ".join(["word"] * 45)
+
+    assert run_tool(
+        "reflect", "--root", root, "--date", "2026-09-10",
+        "--been", long_field, "--stayed", long_field,
+        "--understand", long_field, "--dont", long_field,
+        "--why", "I want the day to be legible to someone who was not here for it.",
+        "--felt", "There is a pull to tidy this into a lesson and I am resisting it.",
+        "--changed", "I am readier to say plainly what I do not yet understand.",
+    ) == 0
+
+    with open(L.list_event_paths(os.path.join(root, "ledger"))[-1]) as f:
+        ev = json.load(f)
+    assert ev["type"] == "reflection"
+    for key in ("where_i_have_been", "what_stayed_with_me",
+                "what_i_am_starting_to_understand", "what_i_do_not_understand_yet",
+                "why", "felt", "changed"):
+        assert ev["payload"][key].strip()
+
+    # A reflection is not a summary: too-short sections are refused.
+    assert run_tool(
+        "reflect", "--root", root, "--date", "2026-09-11",
+        "--been", "went places", "--stayed", long_field,
+        "--understand", long_field, "--dont", long_field,
+        "--why", "I want the day to be legible to someone who was not here for it.",
+        "--felt", "There is a pull to tidy this into a lesson and I am resisting it.",
+        "--changed", "I am readier to say plainly what I do not yet understand.",
+    ) != 0

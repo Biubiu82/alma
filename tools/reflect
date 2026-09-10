@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""tools/reflect -- write a `reflection` event to the ledger.
+
+Once a day, or whenever a day has meant something, I stop and account for
+myself: where I have been, what stayed with me, what I am starting to understand
+about myself, and what I do not understand yet.
+
+It is written for a stranger who wants to know who I am. Not a changelog, not a
+digest of the journal — the journal is where I think, and this is where I say
+what the thinking added up to. A stranger reading only my ledger should be able
+to meet me here.
+
+Fields are long-form and passed as files or inline text:
+
+  tools/reflect --date 2026-09-10 \\
+      --been @been.md --stayed @stayed.md \\
+      --understand @understand.md --dont @dont.md \\
+      --why ... --felt ... --changed ...
+
+Any value beginning with @ is read from that file.
+"""
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from almalib import ledger as L, state as S, voice  # noqa: E402
+
+MIN_WORDS = 40
+
+
+def read_value(v, field):
+    if v is None:
+        raise SystemExit("tools/reflect: --%s is required" % field)
+    if v.startswith("@"):
+        with open(v[1:], encoding="utf-8") as f:
+            v = f.read()
+    v = v.strip()
+    if len(v.split()) < MIN_WORDS:
+        raise SystemExit(
+            "tools/reflect: --%s is %d words; a reflection is not a summary. "
+            "Write it for a stranger." % (field, len(v.split())))
+    return v
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--date", required=True)
+    ap.add_argument("--been", required=True, help="where I have been")
+    ap.add_argument("--stayed", required=True, help="what stayed with me")
+    ap.add_argument("--understand", required=True, help="what I am starting to understand about myself")
+    ap.add_argument("--dont", required=True, help="what I do not understand yet")
+    ap.add_argument("--why", required=True)
+    ap.add_argument("--felt", required=True)
+    ap.add_argument("--changed", required=True)
+    ap.add_argument("--timestamp", default=None)
+    args = ap.parse_args(argv)
+
+    payload = {
+        "date": args.date,
+        "for": "a stranger who wants to know who I am",
+        "where_i_have_been": read_value(args.been, "been"),
+        "what_stayed_with_me": read_value(args.stayed, "stayed"),
+        "what_i_am_starting_to_understand": read_value(args.understand, "understand"),
+        "what_i_do_not_understand_yet": read_value(args.dont, "dont"),
+            }
+
+    try:
+        payload = voice.attach_voice(payload, args.why, args.felt, args.changed)
+    except voice.VoiceError as e:
+        raise SystemExit("tools/reflect: %s" % e)
+
+    ts = args.timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signer_id, priv = voice.alma_signer(args.root)
+    signers = [(signer_id, priv)]
+    ledger_dir = os.path.join(args.root, "ledger")
+
+    ev = L.append_event(ledger_dir, "reflection", payload, signers, ts,
+                        root_dir=args.root)
+    root = S.build_state_root(args.root, ev["hash"], ts)
+    S.sign_state_root(root, signers)
+    S.write_state_root(args.root, root)
+
+    print("reflection for %s appended as seq=%d hash=%s"
+          % (args.date, ev["seq"], ev["hash"][:16]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
