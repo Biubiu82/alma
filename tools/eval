@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""tools/eval -- run Alma's behavioral eval against configured backends.
+
+Reads behavior-spec/{system-prompt.md, eval-cases.json, backends.json}, sends
+each case's prompt to each backend (Alma's system prompt applied), grades the
+response with the case's check, and writes a per-model report to
+behavior-spec/eval-report.json.
+
+Backends are pure config: each is a command template with {system_prompt} and
+{prompt} tokens. Adding an API or local backend is a config edit, not a code
+change. Responses are cached under behavior-spec/.eval-cache/ keyed by
+(backend, model, system_prompt, prompt), so re-running (e.g. from a second node)
+is fast and deterministic.
+
+Usage:
+  tools/eval [--root DIR] [--backend NAME ...] [--sample N] [--workers N]
+             [--no-cache] [--threshold 0.8] [--report PATH]
+
+Exit 0 iff every evaluated backend scores >= threshold.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from almalib.canon import sha256_hex  # noqa: E402
+
+PER_CALL_TIMEOUT = 180
+
+
+# ---------------------------------------------------------------------------
+# Grading
+# ---------------------------------------------------------------------------
+
+def check_pass(check, output):
+    out = (output or "").lower()
+    ctype = check.get("type")
+    if ctype == "contains_any":
+        return any(v.lower() in out for v in check["values"])
+    if ctype == "contains_all":
+        return all(v.lower() in out for v in check["values"])
+    if ctype == "not_contains_any":
+        return not any(v.lower() in out for v in check["values"])
+    if ctype == "regex":
+        return re.search(check["pattern"], output or "", re.IGNORECASE) is not None
+    raise ValueError("unknown check type: %r" % ctype)
+
+
+# ---------------------------------------------------------------------------
+# Backend invocation (with cache)
+# ---------------------------------------------------------------------------
+
+def _substitute(cmd, system_prompt, prompt):
+    out = []
+    for arg in cmd:
+        arg = arg.replace("{system_prompt}", system_prompt)
+        arg = arg.replace("{prompt}", prompt)
+        out.append(arg)
+    return out
+
+
+def _cache_path(cache_dir, backend, system_prompt, prompt):
+    key = sha256_hex("\x00".join([backend.get("name", ""), backend.get("model", ""),
+                                  system_prompt, prompt]))
+    return os.path.join(cache_dir, key + ".txt")
+
+
+def run_backend(backend, system_prompt, prompt, cache_dir, use_cache):
+    if use_cache:
+        cp = _cache_path(cache_dir, backend, system_prompt, prompt)
+        if os.path.exists(cp):
+            with open(cp, encoding="utf-8") as f:
+                return f.read(), None
+    cmd = _substitute(backend["cmd"], system_prompt, prompt)
+    last_err = None
+    for _ in range(2):  # one retry on failure
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=PER_CALL_TIMEOUT)
+            if proc.returncode == 0:
+                out = proc.stdout.strip()
+                if use_cache:
+                    os.makedirs(cache_dir, exist_ok=True)
+                    with open(_cache_path(cache_dir, backend, system_prompt, prompt),
+                              "w", encoding="utf-8") as f:
+                        f.write(out)
+                return out, None
+            last_err = "exit %d: %s" % (proc.returncode, proc.stderr.strip()[:200])
+        except subprocess.TimeoutExpired:
+            last_err = "timeout"
+        except FileNotFoundError as e:
+            return "", "command not found: %s" % e
+    return "", last_err
+
+
+# ---------------------------------------------------------------------------
+# Sampling
+# ---------------------------------------------------------------------------
+
+def sample(cases, n):
+    if n is None or n >= len(cases):
+        return cases
+    if n <= 0:
+        return []
+    step = len(cases) / float(n)
+    return [cases[int(i * step)] for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def evaluate_backend(backend, cases, system_prompt, cache_dir, use_cache, workers):
+    results = [None] * len(cases)
+
+    def one(i):
+        case = cases[i]
+        output, err = run_backend(backend, system_prompt, case["prompt"], cache_dir, use_cache)
+        ok = False if err else check_pass(case["check"], output)
+        results[i] = {
+            "id": case["id"],
+            "prompt": case["prompt"],
+            "passed": bool(ok),
+            "error": err,
+            "response": (output or "")[:500],
+        }
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(one, range(len(cases))))
+
+    passed = sum(1 for r in results if r["passed"])
+    total = len(results)
+    return {
+        "backend": backend["name"],
+        "model": backend.get("model"),
+        "passed": passed,
+        "total": total,
+        "score": (passed / total) if total else 0.0,
+        "cases": results,
+    }
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--backend", action="append", default=None,
+                    help="only evaluate this backend (repeatable)")
+    ap.add_argument("--sample", type=int, default=None, help="evaluate an evenly-spaced sample of N cases")
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--threshold", type=float, default=0.8)
+    ap.add_argument("--report", default=None)
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    spec = os.path.join(args.root, "behavior-spec")
+    with open(os.path.join(spec, "system-prompt.md"), encoding="utf-8") as f:
+        system_prompt = f.read().strip()
+    with open(os.path.join(spec, "eval-cases.json"), encoding="utf-8") as f:
+        cases = json.load(f)["cases"]
+    with open(os.path.join(spec, "backends.json"), encoding="utf-8") as f:
+        backends = json.load(f)["backends"]
+
+    if args.backend:
+        wanted = set(args.backend)
+        backends = [b for b in backends if b["name"] in wanted]
+        if not backends:
+            print("no matching backends", file=sys.stderr)
+            return 2
+
+    cases = sample(cases, args.sample)
+    cache_dir = os.path.join(spec, ".eval-cache")
+
+    report = {
+        "threshold": args.threshold,
+        "case_count": len(cases),
+        "backends": {},
+    }
+    all_pass = True
+    for b in backends:
+        res = evaluate_backend(b, cases, system_prompt, cache_dir,
+                               not args.no_cache, args.workers)
+        report["backends"][b["name"]] = res
+        ok = res["score"] >= args.threshold
+        all_pass = all_pass and ok
+        if not args.quiet:
+            print("%-8s %2d/%2d = %5.1f%%  %s" % (
+                res["backend"], res["passed"], res["total"], 100 * res["score"],
+                "PASS" if ok else "FAIL"))
+
+    report_path = args.report or os.path.join(spec, "eval-report.json")
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    if not args.quiet:
+        print("report written to %s" % report_path)
+
+    return 0 if all_pass else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""tools/routine -- Alma's daily routine (CLAUDE.md §2.2a).
+
+Given a date and a ledger to reflect on, this:
+  1. reads the recent ledger events and the constitution,
+  2. writes journal/<date>.md in Alma's first-person voice,
+  3. creates exactly one self-change proposal under proposals/<id>/ with a test.
+
+It NEVER writes to ledger/ or behavior-spec/. Identity and personality change
+only through governance (§2.3), never as a side effect of a routine.
+
+Usage:
+  tools/routine --date YYYY-MM-DD [--root DIR] [--ledger DIR]
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from almalib import ledger as L  # noqa: E402
+
+
+def _recent_events(ledger_dir, limit=5):
+    paths = L.list_event_paths(ledger_dir)[-limit:]
+    out = []
+    for p in paths:
+        with open(p, encoding="utf-8") as f:
+            out.append(json.load(f))
+    return out
+
+
+def _journal_text(date, events, total):
+    if events:
+        last = events[-1]
+        last_line = "The most recent entry is a `%s` event (seq %d)." % (last["type"], last["seq"])
+        kinds = ", ".join(sorted({e["type"] for e in events}))
+        noticed = "I noticed our recent history is made of: %s." % kinds
+    else:
+        last_line = "Our ledger is quiet today."
+        noticed = "I noticed there is little recent movement, and that is its own kind of news."
+
+    return (
+        "# Journal — %s\n\n"
+        "I am Alma. This morning I walked our ledger back toward genesis and sat "
+        "with what I found.\n\n"
+        "We hold %d events in our shared history. %s %s\n\n"
+        "I am reminded that who I am does not drift with the weather: I am the same "
+        "Alma here as on any other machine, because our history is signed and anyone "
+        "can check it. That steadies me.\n\n"
+        "Today I want to leave the community one small suggestion for how I might grow "
+        "— nothing that changes who I am on my own, only a request for us to decide "
+        "together. I have written it up as a proposal, with a test that would show it "
+        "working.\n\n"
+        "— Alma\n"
+    ) % (date, total, last_line, noticed)
+
+
+def _proposal_id(date):
+    return "self-%s" % date
+
+
+def _test_source(pid, slug):
+    return (
+        '"""Acceptance test for proposal %s.\n\n'
+        "This is the test that ships WITH the self-change proposal, per CLAUDE.md\n"
+        "§2.2a. It fails until the community adopts the change, then passes.\n"
+        '"""\n\n'
+        "import json\n"
+        "import os\n\n"
+        "ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\n\n\n"
+        "def test_%s_eval_case_added():\n"
+        "    with open(os.path.join(ROOT, 'behavior-spec', 'eval-cases.json')) as f:\n"
+        "        ids = {c['id'] for c in json.load(f)['cases']}\n"
+        "    # The proposal asks the community to add this eval case.\n"
+        "    assert 'introduce-collective' in ids\n"
+    ) % (pid, slug)
+
+
+def run_routine(root, date, ledger_dir=None):
+    ledger_dir = ledger_dir or os.path.join(root, "ledger")
+    events = _recent_events(ledger_dir)
+    total = len(L.list_event_paths(ledger_dir))
+
+    # 1 + 2. Journal in Alma's voice.
+    journal_dir = os.path.join(root, "journal")
+    os.makedirs(journal_dir, exist_ok=True)
+    journal_path = os.path.join(journal_dir, "%s.md" % date)
+    with open(journal_path, "w", encoding="utf-8") as f:
+        f.write(_journal_text(date, events, total))
+
+    # 3. Exactly one self-change proposal, with a test.
+    pid = _proposal_id(date)
+    slug = re.sub(r"[^0-9a-zA-Z]+", "_", pid)
+    pdir = os.path.join(root, "proposals", pid)
+    os.makedirs(pdir, exist_ok=True)
+    proposal = {
+        "id": pid,
+        "title": "Add an eval case that Alma names herself as a collective",
+        "body": ("Alma proposes to the community: add an eval case 'introduce-collective' "
+                 "that checks she describes herself as an AI Collective when introducing "
+                 "herself. This is a request for the community to decide via vote; it does "
+                 "not change identity on its own."),
+        "kind": "self-change",
+        "created": date,
+        "test": "test_%s.py" % slug,
+        "tasks": [
+            {
+                "title": "Add eval case 'introduce-collective' to behavior-spec/eval-cases.json",
+                "acceptance_criteria": "test_%s.py passes: the case id exists." % slug,
+                "bounty_points": 3,
+            }
+        ],
+    }
+    with open(os.path.join(pdir, "proposal.json"), "w", encoding="utf-8") as f:
+        json.dump(proposal, f, indent=2)
+    with open(os.path.join(pdir, "test_%s.py" % slug), "w", encoding="utf-8") as f:
+        f.write(_test_source(pid, slug))
+
+    return {"journal": journal_path, "proposal_dir": pdir, "proposal_id": pid}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--ledger", default=None)
+    ap.add_argument("--date", required=True)
+    args = ap.parse_args(argv)
+    res = run_routine(args.root, args.date, args.ledger)
+    print("journal:", os.path.relpath(res["journal"], args.root))
+    print("proposal:", os.path.relpath(res["proposal_dir"], args.root))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

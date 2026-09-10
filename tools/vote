@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""tools/vote -- tally a reputation-weighted vote and, if it passes quorum and
+approval, record exactly one `decision` event on the ledger.
+
+Usage:
+  tools/vote --proposal P.json --votes V.json [--reputation R.json]
+             [--quorum 0.5] [--keys DIR] [--signers m1,m2]
+             [--timestamp TS] [--root DIR]
+
+Files:
+  proposal   {"id","title","body","tasks":[{title,acceptance_criteria,bounty_points}]}
+  votes      {"alice":"approve","bob":"reject", ...}
+  reputation {"alice":10, ...}   (default: <root>/state/reputation.json)
+
+Prints the outcome. On approval, appends one `decision` event.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from almalib import governance as G, keys as K  # noqa: E402
+
+
+def _load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--proposal", required=True)
+    ap.add_argument("--votes", required=True)
+    ap.add_argument("--reputation", default=None)
+    ap.add_argument("--quorum", type=float, default=0.5)
+    ap.add_argument("--keys", default=None)
+    ap.add_argument("--signers", default="m1,m2")
+    ap.add_argument("--timestamp", default="2026-01-02T00:00:00Z")
+    args = ap.parse_args(argv)
+
+    proposal = _load(args.proposal)
+    votes = _load(args.votes)
+    rep_path = args.reputation or os.path.join(args.root, "state", "reputation.json")
+    reputation = _load(rep_path)
+
+    result = G.tally(proposal, votes, reputation, quorum=args.quorum)
+    print("proposal %s: approve=%d reject=%d participating=%d/%d quorum_met=%s -> %s" % (
+        result["proposal_id"], result["approve_weight"], result["reject_weight"],
+        result["participating_reputation"], result["total_reputation"],
+        result["quorum_met"], "APPROVED" if result["approved"] else "REJECTED"))
+
+    if not result["approved"]:
+        return 0
+
+    keys_dir = args.keys or os.path.join(args.root, "tests", "keys")
+    signers = [(sid, K.load_priv(keys_dir, sid)) for sid in args.signers.split(",")]
+    ledger_dir = os.path.join(args.root, "ledger")
+    ev = G.record_decision(ledger_dir, proposal, result, signers, args.timestamp)
+    print("recorded decision event seq=%d hash=%s" % (ev["seq"], ev["hash"][:16]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
