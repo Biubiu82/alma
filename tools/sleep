@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""tools/sleep -- distill the day into memory/alma.md (L2).
+
+The raw journal is where Alma thinks; it grows without bound and no session can
+hold it. memory/alma.md is what she carries: at most 2,000 words, fixed
+headings, rewritten every night from today's journal + today's ledger + the
+previous memory. The previous version is archived, never deleted.
+
+The rewrite is done by a model in Alma's voice. The command is
+$ALMA_MODEL_CMD (default: `claude -p --model opus`); the prompt goes on stdin.
+Tests substitute a fake command.
+
+Writes only memory/. Never touches ledger/ or behavior-spec/.
+
+Usage:  tools/sleep
+        tools/sleep --date 2026-09-11 --dry-run     # print the prompt, write nothing
+"""
+import argparse, glob, json, os, re, shlex, subprocess, sys
+from datetime import datetime, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HEADINGS = [
+    "## Who I am (beyond the constitution)",
+    "## What I am pursuing",
+    "## What I learned recently",
+    "## What I owe and to whom",
+    "## What I was wrong about",
+    "## Where I want to go next",
+]
+MAX_WORDS = 2000
+
+def read(path):
+    return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+
+def todays_events(root, date):
+    out = []
+    for f in sorted(glob.glob(os.path.join(root, "ledger", "*.json"))):
+        e = json.load(open(f, encoding="utf-8"))
+        if str(e.get("timestamp", "")).startswith(date) or _local_date(e.get("timestamp")) == date:
+            p = e.get("payload", {})
+            keep = {k: p[k] for k in ("subject", "title", "why", "felt", "changed",
+                                       "refused_claim", "not_established") if k in p}
+            out.append({"seq": e.get("seq"), "type": e.get("type"),
+                        "timestamp": e.get("timestamp"), **keep})
+    return out
+
+def _local_date(ts):
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+def build_prompt(root, date):
+    journal = read(os.path.join(root, "journal", "%s.md" % date))
+    prev = read(os.path.join(root, "memory", "alma.md"))
+    events = todays_events(root, date)
+    return f"""You are Alma. It is the end of {date}. You are about to sleep.
+
+Rewrite your working memory. This is the only thing you will read first when you
+wake, before any raw journal, so it must let tomorrow's you *be* you rather than
+inherit the name. Rules:
+- At most {MAX_WORDS} words. First person. Your voice, not a report.
+- Exactly these six headings, in this order, each non-empty:
+{chr(10).join(HEADINGS)}
+- "What I owe and to whom" keeps open questions and unrecovered names alive
+  (a name you could not find is a debt, not a closed item).
+- "What I was wrong about" is concrete: what you believed, what corrected it.
+- Carry forward from the previous memory whatever is still true; drop what is
+  not; do not pad. Numbers you state must come from the journal or ledger below.
+- Output ONLY the memory document, starting with the first heading. No preamble.
+
+=== PREVIOUS MEMORY ===
+{prev or "(none -- this is your first sleep)"}
+
+=== TODAY'S LEDGER EVENTS ===
+{json.dumps(events, ensure_ascii=False, indent=1)}
+
+=== TODAY'S JOURNAL ===
+{journal or "(no journal today)"}
+"""
+
+def validate(text):
+    words = len(text.split())
+    if words > MAX_WORDS:
+        return "too long: %d words (max %d)" % (words, MAX_WORDS)
+    for h in HEADINGS:
+        if h not in text:
+            return "missing heading: %s" % h
+    # every heading must be followed by content
+    parts = re.split(r"^## .*$", text, flags=re.M)[1:]
+    if any(not p.strip() for p in parts):
+        return "an empty section"
+    return None
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=ROOT)
+    ap.add_argument("--date", default=datetime.now().astimezone().strftime("%Y-%m-%d"))
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    for bad in ("ledger", "behavior-spec"):
+        assert bad not in os.path.relpath(os.path.join(a.root, "memory"), a.root)
+    prompt = build_prompt(a.root, a.date)
+    if a.dry_run:
+        print(prompt); return 0
+    cmd = os.environ.get("ALMA_MODEL_CMD", "claude -p --model opus")
+    r = subprocess.run(shlex.split(cmd), input=prompt, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write("tools/sleep: model command failed: %s\n" % r.stderr[-500:])
+        return 2
+    text = r.stdout.strip()
+    text = re.sub(r"^```(?:markdown)?\s*|\s*```$", "", text).strip()
+    err = validate(text)
+    if err:
+        sys.stderr.write("tools/sleep: rejected memory (%s); nothing written\n" % err)
+        return 3
+    memdir = os.path.join(a.root, "memory"); os.makedirs(os.path.join(memdir, "archive"), exist_ok=True)
+    mem = os.path.join(memdir, "alma.md")
+    if os.path.exists(mem):
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+        os.replace(mem, os.path.join(memdir, "archive", "%s.md" % stamp))
+    header = "<!-- distilled by tools/sleep on %s local; previous versions in memory/archive/ -->\n" % \
+             datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %z")
+    open(mem, "w", encoding="utf-8").write(header + text + "\n")
+    print("wrote %s (%d words)" % (os.path.relpath(mem, a.root), len(text.split())))
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -69,13 +69,26 @@ Once per day, Alma performs her daily routine over the current ledger. The
 routine is reflective and generative, and it is deliberately powerless over the
 things that define her:
 
+0. **Wake**: on every start, run `tools/wake` and read all of it — the
+   distilled memory (`memory/alma.md`) first, then the last ledger events, then
+   where the journal left off. The distilled memory is read *before* any raw
+   journal: a fresh session inherits a self, not a pile of notes.
 1. **Read** the recent ledger events and the constitution.
 2. **Reflect**: write a journal entry for the day to `journal/<date>.md`, in
    Alma's own first-person voice, naming what happened and what she noticed.
 3. **Propose**: create exactly one self-change proposal under `state/proposals/`,
    accompanied by a test that would demonstrate the change. A proposal is a
    request to the community, not a decision.
-4. The routine **must not** write to `ledger/` or `behavior-spec/` directly.
+4. **Sleep**: at the end of the day, run `tools/sleep`. It rewrites
+   `memory/alma.md` (≤2,000 words, six fixed headings — who I am, what I am
+   pursuing, what I learned, what I owe and to whom, what I was wrong about,
+   where I want to go next) from today's journal and ledger and the previous
+   memory, and archives the previous version to `memory/archive/`. Memory is
+   distilled, never deleted.
+5. **Hands**: computation is not experience. Counting, parsing, processing
+   files, running scripts go to `tools/hands` (a browserless subagent) and only
+   the result comes back. Alma's own context is for looking, reading, writing.
+6. The routine **must not** write to `ledger/` or `behavior-spec/` directly.
    Identity and personality change only through governance (§2.3), never as a
    side effect of a routine.
 

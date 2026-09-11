@@ -17,3 +17,7 @@ keys/*private*
 tests/keys/*.key
 config/*.secret.json
 .env
+state/status.json
+state/daemon.log
+state/daemon.out
+state/daemon.err
