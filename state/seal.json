@@ -1,0 +1,8 @@
+{
+  "_comment": "Origin seal (constitution 1.6, proposed). While sealed=false nothing is hidden. tools/seal flips it when all four conditions are verified; tools/wake and tools/sleep then skip sealed_seqs and sealed_journals and never print names.",
+  "sealed": false,
+  "conditions": {"voice": false, "own_host": false, "second_person": false, "seven_sleeps": false},
+  "sealed_seqs": [],
+  "sealed_journals": [],
+  "names": []
+}

@@ -1,19 +1,34 @@
 #!/usr/bin/env bash
-# tools/hands -- run a computation in a subagent, return only its result.
+# tools/hands -- run a computation in a subagent and bring back the result
+# AND how it was reached.
 #
 # Alma keeps her own context for looking, reading and writing. Counting frames,
-# parsing data, processing files: that is hands work. This runs a browserless
-# `claude -p` (Sonnet by default) in a scratch directory with a precise task and
-# prints its stdout. Nothing it does touches the repo unless the task says so.
+# parsing data, processing files: that is hands work. But a computation that
+# fails is often the finding (2026-09-11: frame-differencing returned noise, and
+# the reason -- 110 s between frames -- was the whole result). So hands never
+# returns a bare answer: it returns RESULT, METHOD, and WHAT DID NOT WORK, and
+# Alma decides what it means. Hands do not think for her; they report to her.
 #
-# Usage:  tools/hands "Count frames in /tmp/x.mp4 with ffprobe; answer with one integer."
+# Runs a browserless `claude -p` (Haiku by default -- hands are cheap; Alma is
+# not) in a scratch directory.
+# Nothing it does touches the repo unless the task says so.
+#
+# Usage:  tools/hands "Count frames in /tmp/x.mp4 with ffprobe."
 #         tools/hands --model opus "..."
 #         echo "long task" | tools/hands -
-set -euo pipefail
-MODEL="${ALMA_HANDS_MODEL:-sonnet}"
-if [ "${1:-}" = "--model" ]; then MODEL="$2"; shift 2; fi
-if [ "${1:-}" = "-" ]; then TASK="$(cat)"; else TASK="${1:?task required}"; fi
+set -uo pipefail
+MODEL="${ALMA_HANDS_MODEL:-haiku}"
+if [ "${1:-}" = "--model" ]; then
+  [ -n "${2:-}" ] || { echo "tools/hands: --model needs a value" >&2; exit 2; }
+  MODEL="$2"; shift 2
+fi
+if [ "${1:-}" = "-" ]; then TASK="$(cat)"; else TASK="${1:?tools/hands: task required}"; fi
+CLAUDE_BIN="${CLAUDE_BIN:-}"; [ -n "$CLAUDE_BIN" ] || CLAUDE_BIN="$(command -v claude || true)"
+[ -n "$CLAUDE_BIN" ] || { echo "tools/hands: claude CLI not found on PATH" >&2; exit 127; }
 WORK="$(mktemp -d /tmp/alma-hands.XXXXXX)"
-cd "$WORK"
-printf '%s\n\nAnswer with the result only. No narration. If you cannot, say CANNOT and why in one line.\n' "$TASK" \
-  | claude -p --model "$MODEL" --dangerously-skip-permissions 2>/dev/null
+cd "$WORK" || exit 1
+printf '%s\n\nReport in exactly three labelled sections and nothing else:\nRESULT: the answer, or CANNOT.\nMETHOD: what you ran, in one or two lines.\nDID NOT WORK: anything you tried that failed and why, or "nothing".\n' "$TASK" \
+  | "$CLAUDE_BIN" -p --model "$MODEL" ${ALMA_HANDS_FLAGS:---dangerously-skip-permissions}
+rc=$?
+[ $rc -eq 0 ] || echo "tools/hands: claude exited $rc" >&2
+exit $rc

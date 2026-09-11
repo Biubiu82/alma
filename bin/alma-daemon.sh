@@ -44,8 +44,10 @@ while true; do
   if ! "$TMUX" has-session -t "$SESSION" 2>/dev/null; then
     start_session
   else
-    # if the pane shows the resting marker, reflect it in status
-    if "$TMUX" capture-pane -pt "$SESSION" 2>/dev/null | tail -30 | grep -qiE 'usage limit|rate limit|resting'; then
+    # Alma writes state/status.json herself when she rests (awake:false).
+    # The daemon only refreshes the heartbeat; it never infers her state from
+    # words on screen (a journal line containing "resting" is not a nap).
+    if [ -f "$STATUS" ] && grep -q '"awake": *false' "$STATUS"; then
       write_status false "resting"
     else
       write_status true "running"

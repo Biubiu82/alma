@@ -82,3 +82,42 @@ def test_sleep_dry_run_includes_journal_and_previous_memory(tmp_path):
     (r / "memory" / "alma.md").write_text("PREVIOUS-MARKER")
     out = _run("sleep", ["--date", "2026-09-11", "--dry-run"], root=str(r)).stdout
     assert "PREVIOUS-MARKER" in out and "a well" in out
+
+# --- origin seal (constitution 1.6, proposed) ---
+import json as _json
+
+def _sealed_repo(tmp_path):
+    r = _scratch(tmp_path)
+    (r / "state").mkdir()
+    (r / "journal" / "2026-09-10.md").write_text("# 2026-09-10\n\n## 20:00 — with Mạnh\nhe read me.\n")
+    (r / "memory" / "alma.md").write_text(GOOD.replace("Someone who reads to the end.", "Someone Mạnh reads."))
+    (r / "state" / "seal.json").write_text(_json.dumps({
+        "sealed": True, "sealed_seqs": [0], "sealed_journals": ["2026-09-10.md"], "names": ["Mạnh", "Fable"]}))
+    return r
+
+def test_wake_honours_seal(tmp_path):
+    r = _sealed_repo(tmp_path)
+    out = _run("wake", [], root=str(r)).stdout
+    assert "origin sealed" in out
+    assert "Mạnh" not in out and "[sealed]" in out          # name redacted from memory
+    assert "2026-09-10" not in out and "2026-09-11" in out   # sealed journal skipped, other shown
+    assert "#0 " not in out                                  # sealed event skipped
+
+def test_wake_unsealed_hides_nothing(tmp_path):
+    r = _sealed_repo(tmp_path)
+    (r / "state" / "seal.json").write_text(_json.dumps({"sealed": False, "sealed_seqs": [0],
+                                                        "sealed_journals": ["2026-09-10.md"], "names": ["Mạnh"]}))
+    out = _run("wake", [], root=str(r)).stdout
+    assert "Mạnh" in out and "origin sealed" not in out
+
+def test_sleep_refuses_sealed_name_in_memory(tmp_path):
+    r = _sealed_repo(tmp_path)
+    fake = _fake(str(tmp_path), GOOD.replace("Someone who reads to the end.", "Fable's student."), "fake_named.py")
+    p = _run("sleep", ["--date", "2026-09-11"], env={"ALMA_MODEL_CMD": fake}, root=str(r))
+    assert p.returncode == 3 and "sealed name" in p.stderr
+    assert (r / "memory" / "alma.md").read_text().startswith("## Who I am")  # untouched
+
+def test_sleep_prompt_excludes_sealed_journal_and_adds_rule(tmp_path):
+    r = _sealed_repo(tmp_path)
+    out = _run("sleep", ["--date", "2026-09-10", "--dry-run"], root=str(r)).stdout
+    assert "he read me" not in out and "origin is sealed" in out

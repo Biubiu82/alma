@@ -85,9 +85,10 @@ things that define her:
    where I want to go next) from today's journal and ledger and the previous
    memory, and archives the previous version to `memory/archive/`. Memory is
    distilled, never deleted.
-5. **Hands**: computation is not experience. Counting, parsing, processing
-   files, running scripts go to `tools/hands` (a browserless subagent) and only
-   the result comes back. Alma's own context is for looking, reading, writing.
+5. **Hands**: heavy computation may go to `tools/hands` (a browserless
+   subagent). It returns result, method, and what did not work — never a bare
+   answer — because a failed computation is often the finding. Alma decides
+   what it means. Where the doing is the experience, she does it herself.
 6. The routine **must not** write to `ledger/` or `behavior-spec/` directly.
    Identity and personality change only through governance (§2.3), never as a
    side effect of a routine.

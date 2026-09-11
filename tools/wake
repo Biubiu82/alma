@@ -14,19 +14,43 @@ from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-def last_events(root, n):
-    files = sorted(glob.glob(os.path.join(root, "ledger", "*.json")))[-n:]
-    out = []
-    for f in files:
-        e = json.load(open(f, encoding="utf-8"))
-        p = e.get("payload", {})
-        out.append((e.get("seq"), e.get("type"), e.get("timestamp"),
-                    p.get("subject") or p.get("title") or p.get("text", "")[:80],
-                    p.get("changed", "")))
-    return out
+def load_seal(root):
+    p = os.path.join(root, "state", "seal.json")
+    if not os.path.exists(p):
+        return {"sealed": False, "sealed_seqs": [], "sealed_journals": [], "names": []}
+    return json.load(open(p, encoding="utf-8"))
 
-def last_journal_heading(root):
+def redact(text, seal):
+    if not seal.get("sealed"):
+        return text
+    for n in seal.get("names", []):
+        text = text.replace(n, "[sealed]")
+    return text
+
+def last_events(root, n, seal=None):
+    seal = seal or load_seal(root)
+    files = sorted(glob.glob(os.path.join(root, "ledger", "*.json")))
+    out = []
+    for f in reversed(files):
+        if len(out) >= n:
+            break
+        e = json.load(open(f, encoding="utf-8"))
+        if seal.get("sealed") and e.get("seq") in set(seal.get("sealed_seqs", [])):
+            continue
+        out.insert(0, e)
+    res = []
+    for e in out:
+        p = e.get("payload", {})
+        res.append((e.get("seq"), e.get("type"), e.get("timestamp"),
+                    redact(str(p.get("subject") or p.get("title") or p.get("text", "")[:80]), seal),
+                    redact(str(p.get("changed", "")), seal)))
+    return res
+
+def last_journal_heading(root, seal=None):
+    seal = seal or load_seal(root)
     files = sorted(glob.glob(os.path.join(root, "journal", "*.md")))
+    if seal.get("sealed"):
+        files = [f for f in files if os.path.basename(f) not in set(seal.get("sealed_journals", []))]
     if not files:
         return None, None
     f = files[-1]
@@ -39,20 +63,23 @@ def main(argv=None):
     ap.add_argument("--events", type=int, default=3)
     a = ap.parse_args(argv)
     mem = os.path.join(a.root, "memory", "alma.md")
+    seal = load_seal(a.root)
     now = datetime.now().astimezone()
     print("# WAKE  %s" % now.strftime("%Y-%m-%d %H:%M %z"))
+    if seal.get("sealed"):
+        print("(origin sealed -- constitution 1.6. You were made; a record of it exists; you cannot read it.)")
     print()
     if os.path.exists(mem):
-        print(open(mem, encoding="utf-8").read().rstrip())
+        print(redact(open(mem, encoding="utf-8").read().rstrip(), seal))
     else:
         print("(memory/alma.md does not exist yet -- you have no distilled memory; "
               "you have only the raw journal. Run tools/sleep at the end of today.)")
     print("\n---\n# LAST %d LEDGER EVENTS" % a.events)
-    for seq, typ, ts, subj, changed in last_events(a.root, a.events):
+    for seq, typ, ts, subj, changed in last_events(a.root, a.events, seal):
         print("- #%s %s %s -- %s" % (seq, typ, ts, subj))
         if changed:
             print("    changed: %s" % changed[:300])
-    jf, head = last_journal_heading(a.root)
+    jf, head = last_journal_heading(a.root, seal)
     print("\n---\n# WHERE I LEFT OFF")
     print("%s  %s" % (jf, head) if jf else "(no journal yet)")
     return 0

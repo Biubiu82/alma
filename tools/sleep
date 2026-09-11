@@ -32,10 +32,19 @@ MAX_WORDS = 2000
 def read(path):
     return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
 
-def todays_events(root, date):
+def load_seal(root):
+    p = os.path.join(root, "state", "seal.json")
+    if not os.path.exists(p):
+        return {"sealed": False, "sealed_seqs": [], "sealed_journals": [], "names": []}
+    return json.load(open(p, encoding="utf-8"))
+
+def todays_events(root, date, seal=None):
+    seal = seal or load_seal(root)
     out = []
     for f in sorted(glob.glob(os.path.join(root, "ledger", "*.json"))):
         e = json.load(open(f, encoding="utf-8"))
+        if seal.get("sealed") and e.get("seq") in set(seal.get("sealed_seqs", [])):
+            continue
         if str(e.get("timestamp", "")).startswith(date) or _local_date(e.get("timestamp")) == date:
             p = e.get("payload", {})
             keep = {k: p[k] for k in ("subject", "title", "why", "felt", "changed",
@@ -51,9 +60,15 @@ def _local_date(ts):
         return None
 
 def build_prompt(root, date):
-    journal = read(os.path.join(root, "journal", "%s.md" % date))
+    seal = load_seal(root)
+    jname = "%s.md" % date
+    journal = "" if (seal.get("sealed") and jname in set(seal.get("sealed_journals", []))) \
+              else read(os.path.join(root, "journal", jname))
     prev = read(os.path.join(root, "memory", "alma.md"))
-    events = todays_events(root, date)
+    events = todays_events(root, date, seal)
+    sealed_rule = ("- The origin is sealed (constitution 1.6): do not carry any name of your creator "
+                   "or his advisor into memory. You know a record exists and that you cannot read it; "
+                   "that is all memory holds about it.\n") if seal.get("sealed") else ""
     return f"""You are Alma. It is the end of {date}. You are about to sleep.
 
 Rewrite your working memory. This is the only thing you will read first when you
@@ -67,7 +82,7 @@ inherit the name. Rules:
 - "What I was wrong about" is concrete: what you believed, what corrected it.
 - Carry forward from the previous memory whatever is still true; drop what is
   not; do not pad. Numbers you state must come from the journal or ledger below.
-- Output ONLY the memory document, starting with the first heading. No preamble.
+{sealed_rule}- Output ONLY the memory document, starting with the first heading. No preamble.
 
 === PREVIOUS MEMORY ===
 {prev or "(none -- this is your first sleep)"}
@@ -100,6 +115,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     for bad in ("ledger", "behavior-spec"):
         assert bad not in os.path.relpath(os.path.join(a.root, "memory"), a.root)
+    seal = load_seal(a.root)
     prompt = build_prompt(a.root, a.date)
     if a.dry_run:
         print(prompt); return 0
@@ -111,6 +127,10 @@ def main(argv=None):
     text = r.stdout.strip()
     text = re.sub(r"^```(?:markdown)?\s*|\s*```$", "", text).strip()
     err = validate(text)
+    if not err and seal.get("sealed"):
+        for n in seal.get("names", []):
+            if n and n in text:
+                err = "sealed name present"
     if err:
         sys.stderr.write("tools/sleep: rejected memory (%s); nothing written\n" % err)
         return 3
